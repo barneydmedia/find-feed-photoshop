@@ -1,0 +1,17 @@
+{
+  "name": "psexport",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "async": "^0.9.0",
+    "cli-color": "^0.3.3",
+    "prompt": "^0.2.14",
+    "recursive-readdir": "^1.2.1"
+  }
+}
