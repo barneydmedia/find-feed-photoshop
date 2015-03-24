@@ -6,6 +6,12 @@ var prompt = require('prompt');
 var clc = require('cli-color');
 var async = require('async');
 var recursive = require('recursive-readdir');
+var exec = require('child_process').exec;
+
+// some basic color coding
+var error = clc.red.bold;
+var warn = clc.yellow;
+var notice = clc.blue;
 
 // make new lines render correctly cross platform
 var os = require('os'), EOL = os.EOL;
@@ -18,6 +24,20 @@ main.regex;
 main.copyDir;
 main.outputDir = path.normalize('./output');
 main.tempDir = os.tmpdir();
+main.platform = os.platform();
+
+// grab the droplet
+var dropsList = fs.readdirSync('./droplet');
+for (drops in dropsList) {
+  if (!drops.match(/^\./)) {
+    var dropName = dropsList[drops];
+  }
+}
+main.dropletLoc = path.normalize( './droplet/' + dropName);
+
+// grab values as cli options, prompt asks later if not supplied
+if (process.argv[2]) main.searchDir = process.argv[2];
+if (process.argv[3]) main.regex = process.argv[3];
 
 // clear the CLI to clean up visually before beginning
 console.log(clc.reset);
@@ -26,36 +46,44 @@ console.log(clc.reset);
 async.waterfall([function(callback) {
     prompt.start();
 
-    // ask for some user input
-    prompt.get({
-      properties: {
-        searchDir: {
-          description: 'What is the full path of the directory you want to search?'.green,
-          message: 'This field is required.',
-          required: true
-        },
-        copyDir: {
-          description: 'Would you like the output files automatically moved somewhere other than this output folder? (give full path)'.green
-        },
-        regex: {
-          description: 'What should the filepath look like? The default is "/psd$/", meaning "anything with \'psd\' on the tail end of it".'.green
-        }
+    var promptObj = {};
+
+    if (!promptObj.searchDir) {
+      promptObj.searchDir = {
+        description: 'What is the full path of the directory you want to search? (default: desktop)'.green
       }
-    }, function(err, results) {
-      if (err) console.log(err);
+    }
 
-      console.log(clc.reset);
-      console.log('User input received, searching for files...');
+    if (!promptObj.regex) {
+      promptObj.regex = {
+        description: 'What should the filepath look like? The default is "/psd$/", meaning "anything with \'psd\' on the tail end of it".'.green
+      }
+    }
 
-      // callback trigers the next anonymous function
+    // arguments can be specified via CLI options or asked as questions
+    if (!promptObj.searchDir || !promptObj.searchDir) {
+      // ask for some user input
+      prompt.get({
+        properties: promptObj
+      }, function(err, results) {
+        if (err) console.log(err);
+
+        console.log(clc.reset);
+        console.log('User input received, searching for files (this will take a while)...');
+
+        // callback trigers the next anonymous function
+        callback(null, results);
+      });
+    } else {
+      var results = false;
       callback(null, results);
-    });
+    }
     
   }, function(arg1, callback) {
-    main.searchDir = arg1.searchDir.replace(/ $/, '');
-    main.searchDir = main.searchDir.replace(/\\/, '');
-    main.regex = arg1.regex || /psd$/;
-    main.copyDir = arg1.copyDir || false;
+    if (!main.searchDir) main.searchDir = arg1.searchDir || path.normalize('~/Desktop');
+    main.searchDir = main.searchDir.replace(/ $/, '').replace(/\\/g, '');
+    
+    if (!main.regex) main.regex = arg1.regex || /psd$/;
 
     // search for files in the specified directory
     recursive(main.searchDir, function(err, files) {
@@ -63,14 +91,12 @@ async.waterfall([function(callback) {
 
       main.files = files;
       console.log('Found ' + main.files.length + ' files in ' + main.searchDir);
-      console.log('Beginning processing...');
+      console.log('Eliminating unmatching files...');
 
       callback();
-    }, function(callback) {
+    });
 
-      console.log(clc.reset);
-      console.log('Files before cleanup: ');
-      console.log(main.files);
+  }, function(callback) {
 
       // loop through the results to eliminate unwanted files
       for (file in main.files) {
@@ -81,9 +107,6 @@ async.waterfall([function(callback) {
 
       // clears false results from main.files
       clearFalseResults();
-
-      console.log('Files after first clear: ');
-      console.log(main.files);
 
       // make sure the files don't already exist in the output directory
       if (main.copyDir) {
@@ -98,12 +121,6 @@ async.waterfall([function(callback) {
             }
           }
 
-          // clears false results from main.files
-          clearFalseResults();
-
-          console.log('Files after second clear: ');
-          console.log(main.files);
-
           callback();
         });
       } else {
@@ -111,13 +128,58 @@ async.waterfall([function(callback) {
       }
 
     }, function(callback) {
-      console.log('Beginning processing...');
-      for (file in main.files) {
-        if (main.files[file]) console.log('TODO: This is normally where ' + main.files[file] + ' would be processed.');
-      }
+      console.log('Sending to droplet...');
+
+      // make an output folder on the desktop if it doesn't exist
+      fs.exists(main.outputDir, function (exists) {
+        if (!exists) {
+          fs.mkdir(main.outputDir, function() {
+            console.log('Output folder created on desktop...');
+            callback();
+          });
+        } else {
+          callback();
+        }
+      });
       
-    });
-}]);
+    }, function(callback) {
+      // start sending to the droplet and give console feedback
+      var i = 0;
+      for (file in main.files) {
+        i++;
+
+        // clear the console periodically
+        if (i % 10 === 0) console.log(clc.reset);
+
+        if (main.files[file] !== false) {
+          console.log(i + '/' + main.files.length + ' Sending: ' + main.files[file] + ' to ' + main.dropletLoc + '...');
+
+          // add 'open' if on a mac
+          if (main.platform == 'darwin') {
+
+            var platformToken = 'open ';
+            main.files[file] = main.files[file].replace(/ /g, '\\ ');
+            main.dropletLoc = main.dropletLoc.replace(/ /g, '\\ ');
+
+          } else {
+            var platformToken = '';
+          }
+
+          console.log( clc.green( 'Executing: ' + platformToken + main.dropletLoc + ' ' + main.files[file] ) );
+
+          setTimeout(function() {
+            exec(platformToken + main.dropletLoc + ' ' + main.files[file], function (err, stdout, stderr) {
+              if (err) console.log(err);
+              if (stderr) console.log(stderr);
+              console.log('stdout');
+            });
+          }, 50);
+        }
+      }
+      console.log(clc.red('Done!'));
+      callback();
+    }
+]);
 
 function clearFalseResults() {
   // store matches only
