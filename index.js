@@ -18,10 +18,18 @@ var os = require('os'), EOL = os.EOL;
 
 // structure
 var main = {};
+
+// these get defined later
 main.files;
 main.searchDir;
 main.regex;
 main.copyDir;
+
+// these track the progress of the droplet communication, since it's fairly synchronous in operation
+main.currentGroup = 0;
+main.currentFile = 0;
+
+// file path constants
 main.outputDir = path.normalize('./output');
 main.tempDir = os.tmpdir();
 main.platform = os.platform();
@@ -37,7 +45,7 @@ main.dropletLoc = path.normalize( './droplet/' + dropName);
 
 // grab values as cli options, prompt asks later if not supplied
 if (process.argv[2]) main.searchDir = process.argv[2];
-if (process.argv[3]) main.regex = process.argv[3];
+if ( process.argv[3]) main.regex = process.argv[3];
 
 // clear the CLI to clean up visually before beginning
 console.log(clc.reset);
@@ -48,13 +56,13 @@ async.waterfall([function(callback) {
 
     var promptObj = {};
 
-    if (!promptObj.searchDir) {
+    if (!main.searchDir) {
       promptObj.searchDir = {
         description: 'What is the full path of the directory you want to search? (default: desktop)'.green
       }
     }
 
-    if (!promptObj.regex) {
+    if (!main.regex) {
       promptObj.regex = {
         description: 'What should the filepath look like? The default is "/psd$/", meaning "anything with \'psd\' on the tail end of it".'.green
       }
@@ -83,112 +91,112 @@ async.waterfall([function(callback) {
     if (!main.searchDir) main.searchDir = arg1.searchDir || path.normalize('~/Desktop');
     main.searchDir = main.searchDir.replace(/ $/, '').replace(/\\/g, '');
     
-    if (!main.regex) main.regex = arg1.regex || /psd$/;
+    // set a default regex
+    if (!main.regex) { 
+      if (main.regex) { 
+        main.regex = new RegExp(arg1.regex, 'g') 
+      } else {
+        main.regex = /\.psd$/;
+      }
+    }
 
     // search for files in the specified directory
     recursive(main.searchDir, function(err, files) {
       if (err) console.log(err);
 
       main.files = files;
-      console.log('Found ' + main.files.length + ' files in ' + main.searchDir);
-      console.log('Eliminating unmatching files...');
+      console.log('Found ' + main.files.length + ' total files in ' + main.searchDir);
 
       callback();
     });
 
   }, function(callback) {
 
-      // loop through the results to eliminate unwanted files
-      for (file in main.files) {
-        if (!main.files[file].match(main.regex)) {
-          main.files[file] = false;
-        }
+    console.log('Eliminating unmatching files using regex: ' + main.regex);
+
+    // loop through the results to eliminate unwanted files
+    var tempArr = main.files;
+    main.files = [];
+    for (file in tempArr) {
+      if (tempArr[file].match(main.regex)) {
+        main.files.push(tempArr[file]);
       }
+    }
 
-      // clears false results from main.files
-      clearFalseResults();
+    console.log('Found ' + clc.green(main.files.length) + ' matching files...');
 
-      // make sure the files don't already exist in the output directory
-      if (main.copyDir) {
-        recursive(main.copyDir, function(err, copyDirFiles) {
-          if (err) console.log(err);
+    callback();
 
-          var tempArr = [];
-          for (file in copyDirFiles) {
-            var offset = main.files.indexOf( copyDirFiles[file] );
-            if ( offset >= 0 ) {
-              main.files[offset] = false;
-            }
-          }
+  }, function(callback) {
 
+    // make an output folder on the desktop if it doesn't exist
+    fs.exists(main.outputDir, function (exists) {
+      if (!exists) {
+        fs.mkdir(main.outputDir, function() {
+          console.log('Output folder created in directory...');
           callback();
         });
       } else {
+        console.log('Output folder exists, skipping creation...');
         callback();
       }
+    });
+    
+  }, function(callback) {
 
-    }, function(callback) {
-      console.log('Sending to droplet...');
+    // setup the file list for groups (2D array)
+    var fileList = main.files;
+    main.files = [];
 
-      // make an output folder on the desktop if it doesn't exist
-      fs.exists(main.outputDir, function (exists) {
-        if (!exists) {
-          fs.mkdir(main.outputDir, function() {
-            console.log('Output folder created on desktop...');
-            callback();
-          });
-        } else {
-          callback();
-        }
-      });
-      
-    }, function(callback) {
-      // start sending to the droplet and give console feedback
-      var i = 0;
-      for (file in main.files) {
-        i++;
+    // start sending to the droplet, 250 at a time
+    var i = 0;
+    var g = 0;
+    while (i < fileList.length) {
+      // console.log('assigning file: ' + fileList[i] + ' into group: ' + g) ;
+      if (i === 0) main.files[g] = [];
+      main.files[g][i] = fileList[i];
 
-        // clear the console periodically
-        if (i % 10 === 0) console.log(clc.reset);
+      // increment the counter
+      i++;
 
-        if (main.files[file] !== false) {
-          console.log(i + '/' + main.files.length + ' Sending: ' + main.files[file] + ' to ' + main.dropletLoc + '...');
-
-          // add 'open' if on a mac
-          if (main.platform == 'darwin') {
-
-            var platformToken = 'open ';
-            main.files[file] = main.files[file].replace(/ /g, '\\ ');
-            main.dropletLoc = main.dropletLoc.replace(/ /g, '\\ ');
-
-          } else {
-            var platformToken = '';
-          }
-
-          console.log( clc.green( 'Executing: ' + platformToken + main.dropletLoc + ' ' + main.files[file] ) );
-
-          setTimeout(function() {
-            exec(platformToken + main.dropletLoc + ' ' + main.files[file], function (err, stdout, stderr) {
-              if (err) console.log(err);
-              if (stderr) console.log(stderr);
-              console.log('stdout');
-            });
-          }, 50);
-        }
+      // break into groups of 250
+      if (i % 250 === 0) {
+        i = 0;
+        g++;
       }
-      console.log(clc.red('Done!'));
-      callback();
     }
+
+    // actually send the images to the droplet with a recursive function
+    exportImages();
+
+    // console.log(clc.red('Done!'));
+    callback();
+  }
 ]);
 
-function clearFalseResults() {
-  // store matches only
-  var tempArr = [];
-  for (file in main.files) {
-    if (main.files[file] !== false) {
-      tempArr.push(main.files[file]);
-    }
-  }
+function exportImages() {
 
-  main.files = tempArr;
+    // add 'open' if on a mac
+    if (main.platform == 'darwin') {
+
+      var platformToken = 'open ';
+
+      main.dropletLoc = main.dropletLoc.replace(/ /g, '\\ ');
+
+    } else {
+      var platformToken = '';
+    }
+
+    var filesString = '';
+
+    while (main.currentFile < main.currentGroup.length) {
+      filesString += main.files[main.currentGroup][main.currentFile];
+      main.currentFile++;
+    }
+    console.log( clc.blue( main.files[main.currentGroup] ) );
+    main.currentGroup++;
+
+    console.log( clc.blue( filesString.length ) );
+
+    console.log( clc.green( 'Executing: ' + platformToken + main.dropletLoc + ' ' + filesString ) );
 }
