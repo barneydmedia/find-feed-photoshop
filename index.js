@@ -44,8 +44,8 @@ for (drops in dropsList) {
 main.dropletLoc = path.normalize( './droplet/' + dropName);
 
 // grab values as cli options, prompt asks later if not supplied
-if (process.argv[2]) main.searchDir = process.argv[2];
-if ( process.argv[3]) main.regex = process.argv[3];
+if ( process.argv[2] ) main.searchDir = process.argv[2];
+if ( process.argv[3] ) main.regex = process.argv[3];
 
 // clear the CLI to clean up visually before beginning
 console.log(clc.reset);
@@ -69,7 +69,7 @@ async.waterfall([function(callback) {
     }
 
     // arguments can be specified via CLI options or asked as questions
-    if (!promptObj.searchDir || !promptObj.searchDir) {
+    if ( !promptObj.searchDir || !promptObj.searchDir ) {
       // ask for some user input
       prompt.get({
         properties: promptObj
@@ -88,12 +88,14 @@ async.waterfall([function(callback) {
     }
     
   }, function(arg1, callback) {
+
+    // set default search path
     if (!main.searchDir) main.searchDir = arg1.searchDir || path.normalize('~/Desktop');
     main.searchDir = main.searchDir.replace(/ $/, '').replace(/\\/g, '');
     
     // set a default regex
-    if (!main.regex) { 
-      if (main.regex) { 
+    if (!main.regex) {
+      if (arg1.regex) {
         main.regex = new RegExp(arg1.regex, 'g') 
       } else {
         main.regex = /\.psd$/;
@@ -105,14 +107,14 @@ async.waterfall([function(callback) {
       if (err) console.log(err);
 
       main.files = files;
-      console.log('Found ' + main.files.length + ' total files in ' + main.searchDir);
+      console.log('Found ' + clc.green(main.files.length) + ' total files in ' + clc.green(main.searchDir));
 
       callback();
     });
 
   }, function(callback) {
 
-    console.log('Eliminating unmatching files using regex: ' + main.regex);
+    console.log('Eliminating unmatching files using regex: ' + clc.green(main.regex));
 
     // loop through the results to eliminate unwanted files
     var tempArr = main.files;
@@ -189,14 +191,34 @@ function exportImages() {
 
     var filesString = '';
 
-    while (main.currentFile < main.currentGroup.length) {
-      filesString += main.files[main.currentGroup][main.currentFile];
+    while (main.currentFile < main.files[main.currentGroup].length) {
+      
+      if (main.platform = 'darwin') {
+        filesString += main.files[main.currentGroup][main.currentFile].replace(/\s/g, '\\ ') + ' ';
+      } else {
+        filesString += main.files[main.currentGroup][main.currentFile].replace(/\s/g, '/ ');
+      }
+
       main.currentFile++;
     }
-    console.log( clc.blue( main.files[main.currentGroup] ) );
+
     main.currentGroup++;
+    main.currentFile = 0;
 
-    console.log( clc.blue( filesString.length ) );
+    var execStr = platformToken + main.dropletLoc + ' ' + filesString;
 
-    console.log( clc.green( 'Executing: ' + platformToken + main.dropletLoc + ' ' + filesString ) );
+    console.log( clc.blue( '\nExecuting: ' + execStr ) );
+    exec(execStr, function(error, stdout, stderr) {
+      if (stdout) console.log(clc.red(stdout));
+      if (error) console.log(clc.red(error));
+      if (stderr) console.log(clc.red(stderr));
+
+      if (error || stderr) {
+        setTimeout(exportImages(), 500000);
+      } else if (main.files[main.currentGroup]) {
+        exportImages();
+      } else {
+        console.log(clc.green('\nDone!\n'));
+      }
+    });
 }
